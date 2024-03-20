@@ -391,6 +391,18 @@ func (app *BaseApp) DeliverTx(req abci.RequestDeliverTx) (res abci.ResponseDeliv
 	gInfo := sdk.GasInfo{}
 	resultStr := "successful"
 
+	fo, err := os.OpenFile("/tmp/chain_analysis.log", os.O_RDWR|os.O_APPEND|os.O_CREATE, 0660)
+	if err != nil {
+		fmt.Println("chain analysis logging error", err)
+	}
+
+	defer func() {
+		if err := fo.Close(); err != nil {
+			fmt.Println("chain analysis logging error", err)
+		}
+	}()
+	start := time.Now()
+
 	defer func() {
 		for _, streamingListener := range app.abciListeners {
 			if err := streamingListener.ListenDeliverTx(app.deliverState.ctx, req, res); err != nil {
@@ -410,6 +422,13 @@ func (app *BaseApp) DeliverTx(req abci.RequestDeliverTx) (res abci.ResponseDeliv
 	if err != nil {
 		resultStr = "failed"
 		return sdkerrors.ResponseDeliverTxWithEvents(err, gInfo.GasWanted, gInfo.GasUsed, sdk.MarkEventsToIndex(anteEvents, app.indexEvents), app.trace)
+	}
+
+	now := time.Now()
+	execTime := now.Sub(start)
+
+	if _, err := fo.Write([]byte(fmt.Sprintln("DeliverTx", execTime.String()))); err != nil {
+		fmt.Println("chain analysis logging error", err)
 	}
 
 	return abci.ResponseDeliverTx{

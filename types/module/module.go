@@ -31,7 +31,9 @@ package module
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
+	"time"
 
 	"cosmossdk.io/core/appmodule"
 	abci "github.com/cometbft/cometbft/abci/types"
@@ -556,11 +558,37 @@ func (m Manager) RunMigrations(ctx sdk.Context, cfg Configurator, fromVM Version
 func (m *Manager) BeginBlock(ctx sdk.Context, req abci.RequestBeginBlock) abci.ResponseBeginBlock {
 	ctx = ctx.WithEventManager(sdk.NewEventManager())
 
+	fo, err := os.OpenFile("/tmp/chain_analysis.log", os.O_RDWR|os.O_APPEND|os.O_CREATE, 0660)
+	if err != nil {
+		fmt.Println("chain analysis logging error", err)
+	}
+
+	defer func() {
+		if err := fo.Close(); err != nil {
+			fmt.Println("chain analysis logging error", err)
+		}
+	}()
+
+	start := time.Now()
+	moduleExecTime := make(map[string]time.Duration)
 	for _, moduleName := range m.OrderBeginBlockers {
 		module, ok := m.Modules[moduleName].(BeginBlockAppModule)
 		if ok {
 			module.BeginBlock(ctx, req)
+			now := time.Now()
+			execTime := now.Sub(start)
+			moduleExecTime[moduleName] = execTime
+			start = now
 		}
+	}
+
+	bz, err := json.Marshal(moduleExecTime)
+	if err != nil {
+		fmt.Println("chain analysis logging error", err)
+	}
+
+	if _, err := fo.Write([]byte(fmt.Sprintln("BeginBlock", ctx.BlockHeight(), string(bz)))); err != nil {
+		fmt.Println("chain analysis logging error", err)
 	}
 
 	return abci.ResponseBeginBlock{
@@ -575,12 +603,30 @@ func (m *Manager) EndBlock(ctx sdk.Context, req abci.RequestEndBlock) abci.Respo
 	ctx = ctx.WithEventManager(sdk.NewEventManager())
 	validatorUpdates := []abci.ValidatorUpdate{}
 
+	fo, err := os.OpenFile("/tmp/chain_analysis.log", os.O_RDWR|os.O_APPEND|os.O_CREATE, 0660)
+	if err != nil {
+		fmt.Println("chain analysis logging error", err)
+	}
+
+	defer func() {
+		if err := fo.Close(); err != nil {
+			fmt.Println("chain analysis logging error", err)
+		}
+	}()
+
+	start := time.Now()
+	moduleExecTime := make(map[string]time.Duration)
 	for _, moduleName := range m.OrderEndBlockers {
 		module, ok := m.Modules[moduleName].(EndBlockAppModule)
 		if !ok {
 			continue
 		}
 		moduleValUpdates := module.EndBlock(ctx, req)
+
+		now := time.Now()
+		execTime := now.Sub(start)
+		moduleExecTime[moduleName] = execTime
+		start = now
 
 		// use these validator updates if provided, the module manager assumes
 		// only one module will update the validator set
@@ -591,6 +637,15 @@ func (m *Manager) EndBlock(ctx sdk.Context, req abci.RequestEndBlock) abci.Respo
 
 			validatorUpdates = moduleValUpdates
 		}
+	}
+
+	bz, err := json.Marshal(moduleExecTime)
+	if err != nil {
+		fmt.Println("chain analysis logging error", err)
+	}
+
+	if _, err := fo.Write([]byte(fmt.Sprintln("EndBlock", ctx.BlockHeight(), string(bz)))); err != nil {
+		fmt.Println("chain analysis logging error", err)
 	}
 
 	return abci.ResponseEndBlock{
